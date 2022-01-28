@@ -14,25 +14,25 @@ namespace Anomaly.Blocks.OCR
     [BlockCategory("Captchas", "Block that solves image/gif captchas", "#9acd32")]
     public class Methods
     {
+        //static BotData data;
+        static IronTesseract tesseract = new IronTesseract();
+
         [Block("Solves image based captcha using IronOCR", name = "OCR")]
-        public static List<string> Solve(BotData data, bool imageIsBase64, bool isGif, bool readBarCodes, bool pdfAndHOCR, string customTrainedData, string captchaUrl, string ocrCharBlacklist, string ocrCharWhitelist, /*bool test_AutoSolve, */bool greyScale, bool binarize, bool enhanceResolution, bool sharpen, bool contrast, bool invert, bool deskew, int rotation, bool houghStraighten, bool removeNoise, bool noiseDeepClean, bool dilate, bool erode, float CUSTOMNOISE, bool CUSTOMDILATE, float CUSTOMCONTRAST, float CUSTOMGAMMA, float CUSTOMBRIGHTNESS, int CUSTOMSATURATION, string setColorTransparent, int transparentTolerance = 10)
+        public static List<string> AnomalyOcr(BotData data, bool imageIsBase64, bool isGif, bool readBarCodes, bool pdfAndHOCR, string customTrainedData, string captchaUrl, string ocrCharBlacklist, string ocrCharWhitelist, /*bool test_AutoSolve, */bool greyScale, bool binarize, bool enhanceResolution, bool sharpen, bool contrast, bool invert, bool deskew, int rotation, bool houghStraighten, bool removeNoise, bool noiseDeepClean, bool dilate, bool erode, float CUSTOMNOISE, bool CUSTOMDILATE, float CUSTOMCONTRAST, float CUSTOMGAMMA, float CUSTOMBRIGHTNESS, int CUSTOMSATURATION, string setColorTransparent, int transparentTolerance = 10)
         {
-            List<string> ocr = new List<string>();
-            string pluginDir = Directory.GetCurrentDirectory() + @"\UserData\Plugins\AnomalyPlugin";
-            Bitmap appliedCaptcha;
-            Image captcha;
+            List<string> ocrResults = new List<string>();
             Bitmap bCaptcha;
-            Bitmap[] framedCaptcha;
-            double gifConfidence = 0;
+            Bitmap NonIndexed;
+
+            data.Logger.LogHeader();
 
             if (imageIsBase64)
             {
                 byte[] imageBytes = Convert.FromBase64String(captchaUrl);
                 using (var ms = new MemoryStream(imageBytes, 0, imageBytes.Length))
                 {
-                    captcha = (Image)Bitmap.FromStream(ms);
                     bCaptcha = (Bitmap)Bitmap.FromStream(ms);
-                    appliedCaptcha = CreateNonIndexedImage(bCaptcha);
+                    NonIndexed = CreateNonIndexedImage(bCaptcha);
                 }
             }
             else
@@ -42,7 +42,7 @@ namespace Anomaly.Blocks.OCR
                 request.CookieContainer = new CookieContainer();
                 foreach (var h in data.HEADERS)
                 {
-                    if(!data.HEADERS.ContainsValue(h.Key))
+                    if (!data.HEADERS.ContainsValue(h.Key))
                         request.Headers.Add(h.Key, h.Value);
                 }
                 foreach (var c in data.COOKIES)
@@ -51,13 +51,10 @@ namespace Anomaly.Blocks.OCR
                         request.CookieContainer.Add(requestUri, new Cookie(c.Key, c.Value));
                 }
                 var response = request.GetResponse();
-                captcha = Image.FromStream(response.GetResponseStream());
-                appliedCaptcha = CreateNonIndexedImage((Bitmap)captcha);
+                bCaptcha = (Bitmap)Image.FromStream(response.GetResponseStream());
+                NonIndexed = CreateNonIndexedImage(bCaptcha);
             }
 
-
-            var output = new List<string>();
-            IronTesseract tesseract = new IronTesseract();
             tesseract.Configuration.TesseractVersion = TesseractVersion.Tesseract5;
             tesseract.Configuration.EngineMode = TesseractEngineMode.TesseractAndLstm;
             tesseract.Configuration.PageSegmentationMode = TesseractPageSegmentationMode.AutoOsd;
@@ -67,129 +64,24 @@ namespace Anomaly.Blocks.OCR
             tesseract.Configuration.RenderSearchablePdfsAndHocr = pdfAndHOCR;
             if (customTrainedData.Length > 0)
                 tesseract.UseCustomTesseractLanguageFile($"pluginDir\\tessdata\\{customTrainedData}.traineddata");
-            
-            tesseract.MultiThreaded = true;
 
-            OcrInput Input;
-            OcrResult solvedString;
+            tesseract.MultiThreaded = true;
 
             if (isGif)
             {
-                framedCaptcha = getFrames((Bitmap)captcha);
+                Bitmap[] framedCaptcha = getFrames(NonIndexed);
                 int frame = 1;
+                double gifConfidence = 0;
 
                 foreach (Bitmap image in framedCaptcha)
                 {
-                    data.Logger.Log($"Attempting frame: #{frame}", LogColors.Buff);
-                    using (Input = new OcrInput(image))
+                    OcrResult ocr = ApplyFilters(NonIndexed, greyScale, binarize, enhanceResolution, sharpen, contrast, invert, deskew, rotation, houghStraighten, removeNoise, noiseDeepClean, dilate, erode, CUSTOMNOISE, CUSTOMDILATE, CUSTOMCONTRAST, CUSTOMGAMMA, CUSTOMBRIGHTNESS, CUSTOMSATURATION, setColorTransparent, transparentTolerance = 10);
+
+                    if (ocr.Confidence > gifConfidence)
                     {
-                        /*if (test_AutoSolve)
-                        {
-                            List<string> bestConfidence = new List<string>();
-                            Input.Sharpen();
-                            Input.Contrast();
-                            Input.DeNoise();
-                            Input.Dilate(true);
-                        }
-                        else
-                        {*/
-                        //if(scale)
-                        if (greyScale)
-                        {
-                            Input.ToGrayScale();
-                            data.Logger.Log($"Image set to greyscale", LogColors.Orange);
-                        }
-                        if (binarize)
-                        {
-                            Input.Binarize();
-                            data.Logger.Log($"Image Binarized", LogColors.Orange);
-                        }
-                        if (enhanceResolution)
-                        {
-                            Input.EnhanceResolution();
-                            data.Logger.Log($"Image Enhanced", LogColors.Orange);
-                        }
-                        if (sharpen)
-                        {
-                            Input.Sharpen();
-                            data.Logger.Log($"Image Sharpened", LogColors.Orange);
-                        }
-                        if (contrast)
-                        {
-                            Input.Contrast();
-                            data.Logger.Log($"Image Contrast set", LogColors.Orange);
-                        }
-                        if (invert)
-                        {
-                            Input.Invert();
-                            data.Logger.Log($"Image Inverted", LogColors.Orange);
-                        }
-                        if (deskew)
-                        {
-                            Input.Deskew();
-                            data.Logger.Log($"Image Deskewed", LogColors.Orange);
-                        }
-                        if (rotation > 0)
-                        {
-                            Input.Rotate(rotation);
-                            data.Logger.Log($"Image Rotated by: " + rotation + " degrees", LogColors.Orange);
-                        }
-                        if (houghStraighten)
-                        {
-                            Input.HoughTransformStraighten();
-                            data.Logger.Log($"Image set to nearest 90 degree rotation of straightness", LogColors.Orange);
-                        }
-                        if (removeNoise)
-                        {
-                            Input.DeNoise();
-                            data.Logger.Log($"Image Denoised", LogColors.Orange);
-                        }
-                        if (noiseDeepClean)
-                        {
-                            Input.DeepCleanBackgroundNoise();
-                            data.Logger.Log($"Image Denoised like.. a lot", LogColors.Orange);
-                        }
-                        if (dilate)
-                        {
-                            Input.Dilate(false);
-                            data.Logger.Log($"Image Dilated", LogColors.Orange);
-                        }
-                        if (erode)
-                        {
-                            Input.Erode();
-                            data.Logger.Log($"Image Eroded", LogColors.Orange);
-                        }
-                        if (setColorTransparent.Length > 0)
-                        {
-                            setColorTransparent = string.Concat(setColorTransparent[0].ToString().ToUpper(), setColorTransparent.AsSpan(1));
-                            Input.ReplaceColor(ColorTranslator.FromHtml(setColorTransparent), Color.Transparent, transparentTolerance);
-                            data.Logger.Log($"Color {setColorTransparent} magically disappeared", LogColors.Orange);
-                        }
-
-                        foreach (var p in Input.Pages)
-                        {
-                            appliedCaptcha = p.ToBitmap();
-                        }
-
-                        if (CUSTOMCONTRAST > 0 || CUSTOMGAMMA > 0 || CUSTOMBRIGHTNESS > 0)
-                            appliedCaptcha = SetConGamBri(appliedCaptcha, CUSTOMBRIGHTNESS, CUSTOMCONTRAST, CUSTOMGAMMA);
-                        if (CUSTOMSATURATION > 0)
-                            appliedCaptcha = SetSaturation(appliedCaptcha, CUSTOMSATURATION);
-                        if (CUSTOMNOISE > 0)
-                            appliedCaptcha = RemoveNoiseThreshold(appliedCaptcha, CUSTOMNOISE);
-                        if (CUSTOMDILATE)
-                            appliedCaptcha = DilateImage(appliedCaptcha);
-                        //}
-
-                        Input.Dispose();
-                    }
-                    solvedString = tesseract.Read(appliedCaptcha);
-
-                    if (solvedString.Confidence > gifConfidence)
-                    {
-                        output.Clear();
-                        ocr.Add(solvedString.Text);
-                        ocr.Add(solvedString.Confidence.ToString());
+                        ocrResults.Clear();
+                        ocrResults.Add(ocr.Text);
+                        ocrResults.Add(ocr.Confidence.ToString());
                         data.Logger.Log($"Best chance frame set to: #{frame}", LogColors.Jasper);
                     }
                     frame++;
@@ -197,156 +89,102 @@ namespace Anomaly.Blocks.OCR
             }
             else
             {
-                using (Input = new OcrInput(appliedCaptcha))
-                {
-                    /*if (test_AutoSolve)
-                    {
-                        List<string> bestConfidence = new List<string>();
-                        Input.Sharpen();
-                        Input.Contrast();
-                        Input.DeNoise();
-                        Input.Dilate(true);
-                    }
-                    else
-                    {*/
-                    //if(scale)
-                    if (greyScale)
-                    {
-                        Input.ToGrayScale();
-                        data.Logger.Log($"Image set to greyscale", LogColors.Orange);
-                    }
-                    if (binarize)
-                    {
-                        Input.Binarize();
-                        data.Logger.Log($"Image Binarized", LogColors.Orange);
-                    }
-                    if (enhanceResolution)
-                    {
-                        Input.EnhanceResolution();
-                        data.Logger.Log($"Image Enhanced", LogColors.Orange);
-                    }
-                    if (sharpen)
-                    {
-                        Input.Sharpen();
-                        data.Logger.Log($"Image Sharpened", LogColors.Orange);
-                    }
-                    if (contrast)
-                    {
-                        Input.Contrast();
-                        data.Logger.Log($"Image Contrast set", LogColors.Orange);
-                    }
-                    if (invert)
-                    {
-                        Input.Invert();
-                        data.Logger.Log($"Image Inverted", LogColors.Orange);
-                    }
-                    if (deskew)
-                    {
-                        Input.Deskew();
-                        data.Logger.Log($"Image Deskewed", LogColors.Orange);
-                    }
-                    if (rotation > 0)
-                    {
-                        Input.Rotate(rotation);
-                        data.Logger.Log($"Image Rotated by: " + rotation + " degrees", LogColors.Orange);
-                    }
-                    if (houghStraighten)
-                    {
-                        Input.HoughTransformStraighten();
-                        data.Logger.Log($"Image set to nearest 90 degree rotation of straightness", LogColors.Orange);
-                    }
-                    if (removeNoise)
-                    {
-                        Input.DeNoise();
-                        data.Logger.Log($"Image Denoised", LogColors.Orange);
-                    }
-                    if (noiseDeepClean)
-                    {
-                        Input.DeepCleanBackgroundNoise();
-                        data.Logger.Log($"Image Denoised like.. a lot", LogColors.Orange);
-                    }
-                    if (dilate)
-                    {
-                        Input.Dilate(false);
-                        data.Logger.Log($"Image Dilated", LogColors.Orange);
-                    }
-                    if (erode)
-                    {
-                        Input.Erode();
-                        data.Logger.Log($"Image Eroded", LogColors.Orange);
-                    }
-                    if (setColorTransparent.Length > 0)
-                    {
-                        setColorTransparent = string.Concat(setColorTransparent[0].ToString().ToUpper(), setColorTransparent.AsSpan(1));
-                        Input.ReplaceColor(ColorTranslator.FromHtml(setColorTransparent), Color.Transparent, transparentTolerance);
-                        data.Logger.Log($"Color {setColorTransparent} magically disappeared", LogColors.Orange);
-                    }
-
-                    foreach (var p in Input.Pages)
-                    {
-                        appliedCaptcha = p.ToBitmap();
-                    }
-
-                    if (CUSTOMCONTRAST > 0 || CUSTOMGAMMA > 0 || CUSTOMBRIGHTNESS > 0)
-                        appliedCaptcha = SetConGamBri(appliedCaptcha, CUSTOMBRIGHTNESS, CUSTOMCONTRAST, CUSTOMGAMMA);
-                    if (CUSTOMSATURATION > 0)
-                        appliedCaptcha = SetSaturation(appliedCaptcha, CUSTOMSATURATION);
-                    if (CUSTOMNOISE > 0)
-                        appliedCaptcha = RemoveNoiseThreshold(appliedCaptcha, CUSTOMNOISE);
-                    if (CUSTOMDILATE)
-                        appliedCaptcha = DilateImage(appliedCaptcha);
-
-                    solvedString = tesseract.Read(appliedCaptcha);
-                    ocr.Add(solvedString.Text);
-                    ocr.Add(solvedString.Confidence.ToString());
-
-                    Input.Dispose();
-                }
+                OcrResult ocr = ApplyFilters(NonIndexed, greyScale, binarize, enhanceResolution, sharpen, contrast, invert, deskew, rotation, houghStraighten, removeNoise, noiseDeepClean, dilate, erode, CUSTOMNOISE, CUSTOMDILATE, CUSTOMCONTRAST, CUSTOMGAMMA, CUSTOMBRIGHTNESS, CUSTOMSATURATION, setColorTransparent, transparentTolerance = 10);
+                ocrResults.Add(ocr.Text);
+                ocrResults.Add(ocr.Confidence.ToString());
             }
-        return ocr;
+            data.Logger.Log($"Captcha results: {ocrResults[0]} with a confidence of {ocrResults[1]}", LogColors.Blue);
+            return ocrResults;
         }
 
-        //public Bitmap RunAllFrames(Bitmap[] frameCaptcha)
-        //{
-        //    Dictionary<string, int> dictionary = new Dictionary<string, int>();
+        public static OcrResult ApplyFilters(Bitmap image, bool greyScale, bool binarize, bool enhanceResolution, bool sharpen, bool contrast, bool invert, bool deskew, int rotation, bool houghStraighten, bool removeNoise, bool noiseDeepClean, bool dilate, bool erode, float CUSTOMNOISE, bool CUSTOMDILATE, float CUSTOMCONTRAST, float CUSTOMGAMMA, float CUSTOMBRIGHTNESS, int CUSTOMSATURATION, string setColorTransparent, int transparentTolerance = 10)
+        {
+            OcrResult result;
 
-        //    int choose = 0;
-        //    string output = "";
-        //    string[] words = new string[frameCaptcha.Length];
-        //    string autoChoose = "";
-        //    foreach (Bitmap image in frameCaptcha)
-        //    {
-        //        Bitmap settingsImage = ApplySettingsToFrame(image);
-        //        var OCRTess = new TesseractEngine(@".\tessdata", OcrLang, EngineMode.Default);
-        //        Pix OCRimage = PixConverter.ToPix(settingsImage);
-        //        string chosenText = OCRTess.Process(OCRimage).GetText().Trim();
-        //        words[choose] = chosenText;
-        //        output += choose + ": " + chosenText + Environment.NewLine;
-        //        if (chosenText.Length == 4 && chosenText.All(Char.IsLetter))
-        //            autoChoose = chosenText;
-        //        OCRTess.Dispose();
-        //        choose++;
-        //    }
+            using (var Input = new OcrInput(image))
+            {
+                //if(scale)
+                if (greyScale)
+                {
+                    Input.ToGrayScale();
+                }
+                if (binarize)
+                {
+                    Input.Binarize();
+                }
+                if (enhanceResolution)
+                {
+                    Input.EnhanceResolution();
+                }
+                if (sharpen)
+                {
+                    Input.Sharpen();
+                }
+                if (contrast)
+                {
+                    Input.Contrast();
+                }
+                if (invert)
+                {
+                    Input.Invert();
+                }
+                if (deskew)
+                {
+                    Input.Deskew();
+                }
+                if (rotation > 0)
+                {
+                    Input.Rotate(rotation);
+                }
+                if (houghStraighten)
+                {
+                    Input.HoughTransformStraighten();
+                }
+                if (removeNoise)
+                {
+                    Input.DeNoise();
+                }
+                if (noiseDeepClean)
+                {
+                    Input.DeepCleanBackgroundNoise();
+                }
+                if (dilate)
+                {
+                    Input.Dilate(false);
+                }
+                if (erode)
+                {
+                    Input.Erode();
+                }
+                if (setColorTransparent.Length > 0)
+                {
+                    setColorTransparent = string.Concat(setColorTransparent[0].ToString().ToUpper(), setColorTransparent.AsSpan(1));
+                    Input.ReplaceColor(ColorTranslator.FromHtml(setColorTransparent), Color.Transparent, transparentTolerance);
+                }
 
-        //    foreach (string word in words)
-        //    {
-        //        if (dictionary.ContainsKey(word))
-        //        {
-        //            dictionary[word] += 1;
-        //        }
-        //        else
-        //        {
-        //            dictionary.Add(word, 1);
-        //        }
-        //    }
-        //    var keyAndValue = dictionary.OrderBy(kvp => kvp.Value).First();
-        //    //MessageBox.Show(output);
+                foreach (var p in Input.Pages)
+                {
+                    image = p.ToBitmap();
+                }
 
-        //    //MessageBox.Show("Best automatic choice: " + keyAndValue.Key);
+                if (CUSTOMCONTRAST > 0 || CUSTOMGAMMA > 0 || CUSTOMBRIGHTNESS > 0)
+                    image = SetConGamBri(image, CUSTOMBRIGHTNESS, CUSTOMCONTRAST, CUSTOMGAMMA);
+                if (CUSTOMSATURATION > 0)
+                    image = SetSaturation(image, CUSTOMSATURATION);
+                if (CUSTOMNOISE > 0)
+                    image = RemoveNoiseThreshold(image, CUSTOMNOISE);
+                if (CUSTOMDILATE)
+                    image = DilateImage(image);
 
-        //    Bitmap chosenFrame = frameCaptcha[choose];
-        //    return chosenFrame;
-        //}
+                result = tesseract.Read(image);
+                //ocrResults.Add(result.Text);
+                //ocrResults.Add(result.Confidence.ToString());
+
+                Input.Dispose();
+            }
+
+            return result;
+        }
 
         public static Bitmap CreateNonIndexedImage(Bitmap src)
         {
@@ -402,7 +240,7 @@ namespace Anomaly.Blocks.OCR
                     int red = (original.GetPixel(x, y).R + plusSat > 255 ? 255 : (original.GetPixel(x, y).R + plusSat)); //Int32.Parse(original.GetPixel(x, y).R*0.5);
                     int green = (original.GetPixel(x, y).G + plusSat > 255 ? 255 : (original.GetPixel(x, y).G + plusSat)); ;
                     int blue = (original.GetPixel(x, y).B + plusSat > 255 ? 255 : (original.GetPixel(x, y).B + plusSat)); ;
-                    newColor = System.Drawing.Color.FromArgb(red, green, blue);
+                    newColor = Color.FromArgb(red, green, blue);
                     original.SetPixel(x, y, newColor);
                 }
             }
@@ -452,7 +290,7 @@ namespace Anomaly.Blocks.OCR
             }
 
             // Return the result.
-            return FillWhitespace(bm);
+            return bm;// FillWhitespace(bm);
         }
 
         public static Bitmap FillWhitespace(Bitmap Bmp)
@@ -481,8 +319,6 @@ namespace Anomaly.Blocks.OCR
 
             return Bmp;
         }
-
-
 
         public static Bitmap DilateImage(Bitmap SrcImage)
         {
